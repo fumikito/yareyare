@@ -1,0 +1,120 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import requests
+import sys
+import json
+import time
+import re
+from os import path, makedirs
+from bs4 import BeautifulSoup
+
+__author__ = 'Takahashi Fumiki<takahashi.fumiki@hametuha.co.jp>'
+
+
+def parse_archive(url):
+    host = "https://web.archive.org"
+    """
+    Parse archive page and get links
+    :param url:
+    :return: Object
+    """
+    html = requests.get(url, timeout=10)
+    soup = BeautifulSoup(html.text, "html.parser")
+    result = {
+        "links": [],
+        "next": False
+    }
+    for section in soup.find_all("section"):
+        if (not section['class']) or ("archive-entry" not in section['class']):
+            continue
+        date_link = section.find("a")
+        title_link = section.find("a", attrs={"class": "entry-title-link"})
+        result["links"].append({
+            "url": host + title_link.get("href"),
+            "title": title_link.get_text(),
+            "date": date_link.get_text()
+        })
+    next_pager = soup.find('a', attrs={"rel": "next"})
+    if next_pager:
+        result["next"] = host + next_pager.get('href')
+    return result
+
+
+if __name__ == "__main__":
+    try:
+        if len(sys.argv) < 2:
+            raise NotImplementedError('やれやれ')
+        cmd = sys.argv[1]
+        #
+        # List of single pages are required.
+        #
+        if 'list' == cmd:
+            # Check arg length
+            if len(sys.argv) < 3:
+                raise NotImplementedError('やれやれ。3rd argument JSON path is required.')
+            url = 'https://web.archive.org/web/20150430111855/http://www.welluneednt.com/archive/category/%E8%AA%AD%E8%80%85%E2%86%94%E6%9D%91%E4%B8%8A%E6%98%A5%E6%A8%B9'
+            # Start scraping
+            print("Start scraping.")
+            pages = 0
+            singles = []
+            archive = parse_archive(url)
+            while archive['next']:
+                pages += 1
+                for link in archive["links"]:
+                    singles.append(link)
+                sys.stdout.write("\r%d page parsed" % pages)
+                sys.stdout.flush()
+                if archive['next']:
+                    archive = parse_archive(archive['next'])
+                    time.sleep(0.5)
+            # Save file as JSON
+            with open(sys.argv[2], 'w') as file:
+                json.dump(singles, file, sort_keys=False, indent=2)
+            # Done.
+            print("Total: %d pages" % pages)
+        elif 'save' == cmd:
+            if len(sys.argv) < 4:
+                raise NotImplementedError('Argument source file and destination folder are required.')
+            source = sys.argv[2]
+            dest = sys.argv[3]
+            # Read JSON
+            with open(source, 'r') as file:
+                links = json.load(file)
+            print("Retrieve %d pages..." % len(links))
+            counter = 0
+            success = 0
+            errors = 0
+            pattern = re.compile(r"This page is available on the web")
+            for link in links:
+                counter += 1
+                html = requests.get(link["url"], timeout=10)
+                is_404 = pattern.search(html.text)
+                if is_404:
+                    errors += 1
+                else:
+                    success += 1
+                    dest_path = path.join(dest, link["url"].split('www.welluneednt.com/')[1] + '.html')
+                    if not path.isdir(path.dirname(dest_path)):
+                        makedirs(path.dirname(dest_path))
+                    with open(dest_path, 'w') as file:
+                        file.write(html.text)
+                sys.stdout.write("\r%d / %d (%d error)" % (success, counter, errors))
+                sys.stdout.flush()
+                time.sleep(.5)
+        else:
+            raise NotImplementedError('Such command isn\'t implemented.')
+        print("""
+
+===== Done ======
+
+太陽はなぜ今も輝きつづけるのか
+鳥たちはなぜ唄いつづけるのか
+彼らは知らないのだろうか
+世界がもう終わってしまったことを
+
+『世界の終わりとハードボイルドワンダーランド』より
+""")
+    except NotImplementedError as error:
+        print("やれやれ: ", error)
+
